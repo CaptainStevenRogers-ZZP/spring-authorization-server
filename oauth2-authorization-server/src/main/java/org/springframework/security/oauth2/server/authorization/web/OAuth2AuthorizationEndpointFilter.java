@@ -562,6 +562,7 @@ public class OAuth2AuthorizationEndpointFilter extends OncePerRequestFilter {
 			return getScopes().contains(OidcScopes.OPENID);
 		}
 
+		@Override
 		protected String resolveRedirectUri() {
 			return StringUtils.hasText(getRedirectUri()) ?
 					getRedirectUri() :
@@ -611,6 +612,7 @@ public class OAuth2AuthorizationEndpointFilter extends OncePerRequestFilter {
 			this.authorization = authorization;
 		}
 
+		@Override
 		protected String resolveRedirectUri() {
 			OAuth2AuthorizationRequest authorizationRequest = getAuthorizationRequest();
 			return StringUtils.hasText(authorizationRequest.getRedirectUri()) ?
