@@ -22,44 +22,49 @@ import java.util.Base64;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
-import org.junit.Before;
+import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
-import org.mockito.ArgumentCaptor;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.jdbc.core.JdbcOperations;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
+import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.config.test.SpringTestRule;
+import org.springframework.security.crypto.password.NoOpPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.AbstractOAuth2Token;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
-import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames2;
+import org.springframework.security.oauth2.core.OAuth2TokenType;
+import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
 import org.springframework.security.oauth2.jose.TestJwks;
+import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.TestOAuth2Authorizations;
-import org.springframework.security.oauth2.core.OAuth2TokenType;
+import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository.RegisteredClientParametersMapper;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.TestRegisteredClients;
 import org.springframework.security.oauth2.server.authorization.config.ProviderSettings;
-import org.springframework.security.oauth2.server.authorization.web.OAuth2TokenRevocationEndpointFilter;
+import org.springframework.security.oauth2.server.authorization.jackson2.TestingAuthenticationTokenMixin;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -69,8 +74,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author Joe Grandja
  */
 public class OAuth2TokenRevocationTests {
-	private static RegisteredClientRepository registeredClientRepository;
-	private static OAuth2AuthorizationService authorizationService;
+	private static final String DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI = "/oauth2/revoke";
+	private static EmbeddedDatabase db;
 	private static JWKSource<SecurityContext> jwkSource;
 	private static ProviderSettings providerSettings;
 
@@ -80,19 +85,38 @@ public class OAuth2TokenRevocationTests {
 	@Autowired
 	private MockMvc mvc;
 
+	@Autowired
+	private JdbcOperations jdbcOperations;
+
+	@Autowired
+	private RegisteredClientRepository registeredClientRepository;
+
+	@Autowired
+	private OAuth2AuthorizationService authorizationService;
+
 	@BeforeClass
 	public static void init() {
-		registeredClientRepository = mock(RegisteredClientRepository.class);
-		authorizationService = mock(OAuth2AuthorizationService.class);
 		JWKSet jwkSet = new JWKSet(TestJwks.DEFAULT_RSA_JWK);
 		jwkSource = (jwkSelector, securityContext) -> jwkSelector.select(jwkSet);
-		providerSettings = new ProviderSettings().tokenRevocationEndpoint("/test/revoke");
+		providerSettings = ProviderSettings.builder().tokenRevocationEndpoint("/test/revoke").build();
+		db = new EmbeddedDatabaseBuilder()
+				.generateUniqueName(true)
+				.setType(EmbeddedDatabaseType.HSQL)
+				.setScriptEncoding("UTF-8")
+				.addScript("org/springframework/security/oauth2/server/authorization/oauth2-authorization-schema.sql")
+				.addScript("org/springframework/security/oauth2/server/authorization/client/oauth2-registered-client-schema.sql")
+				.build();
 	}
 
-	@Before
-	public void setup() {
-		reset(registeredClientRepository);
-		reset(authorizationService);
+	@After
+	public void tearDown() {
+		jdbcOperations.update("truncate table oauth2_authorization");
+		jdbcOperations.update("truncate table oauth2_registered_client");
+	}
+
+	@AfterClass
+	public static void destroy() {
+		db.shutdown();
 	}
 
 	@Test
@@ -100,27 +124,20 @@ public class OAuth2TokenRevocationTests {
 		this.spring.register(AuthorizationServerConfiguration.class).autowire();
 
 		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
-		when(registeredClientRepository.findByClientId(eq(registeredClient.getClientId())))
-				.thenReturn(registeredClient);
+		this.registeredClientRepository.save(registeredClient);
 
 		OAuth2Authorization authorization = TestOAuth2Authorizations.authorization(registeredClient).build();
 		OAuth2RefreshToken token = authorization.getRefreshToken().getToken();
 		OAuth2TokenType tokenType = OAuth2TokenType.REFRESH_TOKEN;
-		when(authorizationService.findByToken(eq(token.getTokenValue()), isNull())).thenReturn(authorization);
+		this.authorizationService.save(authorization);
 
-		this.mvc.perform(post(OAuth2TokenRevocationEndpointFilter.DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI)
+		this.mvc.perform(post(DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI)
 				.params(getTokenRevocationRequestParameters(token, tokenType))
 				.header(HttpHeaders.AUTHORIZATION, "Basic " + encodeBasicAuth(
 						registeredClient.getClientId(), registeredClient.getClientSecret())))
 				.andExpect(status().isOk());
 
-		verify(registeredClientRepository).findByClientId(eq(registeredClient.getClientId()));
-		verify(authorizationService).findByToken(eq(token.getTokenValue()), isNull());
-
-		ArgumentCaptor<OAuth2Authorization> authorizationCaptor = ArgumentCaptor.forClass(OAuth2Authorization.class);
-		verify(authorizationService).save(authorizationCaptor.capture());
-
-		OAuth2Authorization updatedAuthorization = authorizationCaptor.getValue();
+		OAuth2Authorization updatedAuthorization = this.authorizationService.findById(authorization.getId());
 		OAuth2Authorization.Token<OAuth2RefreshToken> refreshToken = updatedAuthorization.getRefreshToken();
 		assertThat(refreshToken.isInvalidated()).isTrue();
 		OAuth2Authorization.Token<OAuth2AccessToken> accessToken = updatedAuthorization.getAccessToken();
@@ -131,25 +148,24 @@ public class OAuth2TokenRevocationTests {
 	public void requestWhenRevokeAccessTokenThenRevoked() throws Exception {
 		this.spring.register(AuthorizationServerConfiguration.class).autowire();
 
-		assertRevokeAccessTokenThenRevoked(OAuth2TokenRevocationEndpointFilter.DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI);
+		assertRevokeAccessTokenThenRevoked(DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI);
 	}
 
 	@Test
 	public void requestWhenRevokeAccessTokenCustomEndpointThenRevoked() throws Exception {
 		this.spring.register(AuthorizationServerConfigurationCustomEndpoints.class).autowire();
 
-		assertRevokeAccessTokenThenRevoked(providerSettings.tokenRevocationEndpoint());
+		assertRevokeAccessTokenThenRevoked(providerSettings.getTokenRevocationEndpoint());
 	}
 
 	private void assertRevokeAccessTokenThenRevoked(String tokenRevocationEndpointUri) throws Exception {
 		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
-		when(registeredClientRepository.findByClientId(eq(registeredClient.getClientId())))
-				.thenReturn(registeredClient);
+		this.registeredClientRepository.save(registeredClient);
 
 		OAuth2Authorization authorization = TestOAuth2Authorizations.authorization(registeredClient).build();
 		OAuth2AccessToken token = authorization.getAccessToken().getToken();
 		OAuth2TokenType tokenType = OAuth2TokenType.ACCESS_TOKEN;
-		when(authorizationService.findByToken(eq(token.getTokenValue()), isNull())).thenReturn(authorization);
+		this.authorizationService.save(authorization);
 
 		this.mvc.perform(post(tokenRevocationEndpointUri)
 				.params(getTokenRevocationRequestParameters(token, tokenType))
@@ -157,13 +173,7 @@ public class OAuth2TokenRevocationTests {
 						registeredClient.getClientId(), registeredClient.getClientSecret())))
 				.andExpect(status().isOk());
 
-		verify(registeredClientRepository).findByClientId(eq(registeredClient.getClientId()));
-		verify(authorizationService).findByToken(eq(token.getTokenValue()), isNull());
-
-		ArgumentCaptor<OAuth2Authorization> authorizationCaptor = ArgumentCaptor.forClass(OAuth2Authorization.class);
-		verify(authorizationService).save(authorizationCaptor.capture());
-
-		OAuth2Authorization updatedAuthorization = authorizationCaptor.getValue();
+		OAuth2Authorization updatedAuthorization = this.authorizationService.findById(authorization.getId());
 		OAuth2Authorization.Token<OAuth2AccessToken> accessToken = updatedAuthorization.getAccessToken();
 		assertThat(accessToken.isInvalidated()).isTrue();
 		OAuth2Authorization.Token<OAuth2RefreshToken> refreshToken = updatedAuthorization.getRefreshToken();
@@ -172,8 +182,8 @@ public class OAuth2TokenRevocationTests {
 
 	private static MultiValueMap<String, String> getTokenRevocationRequestParameters(AbstractOAuth2Token token, OAuth2TokenType tokenType) {
 		MultiValueMap<String, String> parameters = new LinkedMultiValueMap<>();
-		parameters.set(OAuth2ParameterNames2.TOKEN, token.getTokenValue());
-		parameters.set(OAuth2ParameterNames2.TOKEN_TYPE_HINT, tokenType.getValue());
+		parameters.set(OAuth2ParameterNames.TOKEN, token.getTokenValue());
+		parameters.set(OAuth2ParameterNames.TOKEN_TYPE_HINT, tokenType.getValue());
 		return parameters;
 	}
 
@@ -190,19 +200,55 @@ public class OAuth2TokenRevocationTests {
 	static class AuthorizationServerConfiguration {
 
 		@Bean
-		RegisteredClientRepository registeredClientRepository() {
-			return registeredClientRepository;
+		OAuth2AuthorizationService authorizationService(JdbcOperations jdbcOperations, RegisteredClientRepository registeredClientRepository) {
+			JdbcOAuth2AuthorizationService authorizationService = new JdbcOAuth2AuthorizationService(jdbcOperations, registeredClientRepository);
+			authorizationService.setAuthorizationRowMapper(new RowMapper(registeredClientRepository));
+			authorizationService.setAuthorizationParametersMapper(new ParametersMapper());
+			return authorizationService;
 		}
 
 		@Bean
-		OAuth2AuthorizationService authorizationService() {
-			return authorizationService;
+		RegisteredClientRepository registeredClientRepository(JdbcOperations jdbcOperations, PasswordEncoder passwordEncoder) {
+			JdbcRegisteredClientRepository jdbcRegisteredClientRepository = new JdbcRegisteredClientRepository(jdbcOperations);
+			RegisteredClientParametersMapper registeredClientParametersMapper = new RegisteredClientParametersMapper();
+			registeredClientParametersMapper.setPasswordEncoder(passwordEncoder);
+			jdbcRegisteredClientRepository.setRegisteredClientParametersMapper(registeredClientParametersMapper);
+			return jdbcRegisteredClientRepository;
+		}
+
+		@Bean
+		JdbcOperations jdbcOperations() {
+			return new JdbcTemplate(db);
 		}
 
 		@Bean
 		JWKSource<SecurityContext> jwkSource() {
 			return jwkSource;
 		}
+
+		@Bean
+		PasswordEncoder passwordEncoder() {
+			return NoOpPasswordEncoder.getInstance();
+		}
+
+		static class RowMapper extends JdbcOAuth2AuthorizationService.OAuth2AuthorizationRowMapper {
+
+			RowMapper(RegisteredClientRepository registeredClientRepository) {
+				super(registeredClientRepository);
+				getObjectMapper().addMixIn(TestingAuthenticationToken.class, TestingAuthenticationTokenMixin.class);
+			}
+
+		}
+
+		static class ParametersMapper extends JdbcOAuth2AuthorizationService.OAuth2AuthorizationParametersMapper {
+
+			ParametersMapper() {
+				super();
+				getObjectMapper().addMixIn(TestingAuthenticationToken.class, TestingAuthenticationTokenMixin.class);
+			}
+
+		}
+
 	}
 
 	@EnableWebSecurity

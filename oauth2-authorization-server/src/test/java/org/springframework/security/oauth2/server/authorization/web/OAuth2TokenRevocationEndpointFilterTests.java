@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,20 @@
  */
 package org.springframework.security.oauth2.server.authorization.web;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.function.Consumer;
+
+import javax.servlet.FilterChain;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.mock.http.client.MockClientHttpResponse;
@@ -27,25 +38,17 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
-import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames2;
-import org.springframework.security.oauth2.core.http.converter.OAuth2ErrorHttpMessageConverter;
 import org.springframework.security.oauth2.core.OAuth2TokenType;
+import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
+import org.springframework.security.oauth2.core.http.converter.OAuth2ErrorHttpMessageConverter;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2TokenRevocationAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.TestRegisteredClients;
-
-import javax.servlet.FilterChain;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,6 +65,7 @@ import static org.mockito.Mockito.when;
  * @author Joe Grandja
  */
 public class OAuth2TokenRevocationEndpointFilterTests {
+	private static final String DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI = "/oauth2/revoke";
 	private AuthenticationManager authenticationManager;
 	private OAuth2TokenRevocationEndpointFilter filter;
 	private final HttpMessageConverter<OAuth2Error> errorHttpResponseConverter =
@@ -107,7 +111,7 @@ public class OAuth2TokenRevocationEndpointFilterTests {
 
 	@Test
 	public void doFilterWhenTokenRevocationRequestGetThenNotProcessed() throws Exception {
-		String requestUri = OAuth2TokenRevocationEndpointFilter.DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI;
+		String requestUri = DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI;
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", requestUri);
 		request.setServletPath(requestUri);
 		MockHttpServletResponse response = new MockHttpServletResponse();
@@ -121,31 +125,32 @@ public class OAuth2TokenRevocationEndpointFilterTests {
 	@Test
 	public void doFilterWhenTokenRevocationRequestMissingTokenThenInvalidRequestError() throws Exception {
 		doFilterWhenTokenRevocationRequestInvalidParameterThenError(
-				OAuth2ParameterNames2.TOKEN,
+				OAuth2ParameterNames.TOKEN,
 				OAuth2ErrorCodes.INVALID_REQUEST,
-				request -> request.removeParameter(OAuth2ParameterNames2.TOKEN));
+				request -> request.removeParameter(OAuth2ParameterNames.TOKEN));
 	}
 
 	@Test
 	public void doFilterWhenTokenRevocationRequestMultipleTokenThenInvalidRequestError() throws Exception {
 		doFilterWhenTokenRevocationRequestInvalidParameterThenError(
-				OAuth2ParameterNames2.TOKEN,
+				OAuth2ParameterNames.TOKEN,
 				OAuth2ErrorCodes.INVALID_REQUEST,
-				request -> request.addParameter(OAuth2ParameterNames2.TOKEN, "token-2"));
+				request -> request.addParameter(OAuth2ParameterNames.TOKEN, "token-2"));
 	}
 
 	@Test
 	public void doFilterWhenTokenRevocationRequestMultipleTokenTypeHintThenInvalidRequestError() throws Exception {
 		doFilterWhenTokenRevocationRequestInvalidParameterThenError(
-				OAuth2ParameterNames2.TOKEN_TYPE_HINT,
+				OAuth2ParameterNames.TOKEN_TYPE_HINT,
 				OAuth2ErrorCodes.INVALID_REQUEST,
-				request -> request.addParameter(OAuth2ParameterNames2.TOKEN_TYPE_HINT, OAuth2TokenType.ACCESS_TOKEN.getValue()));
+				request -> request.addParameter(OAuth2ParameterNames.TOKEN_TYPE_HINT, OAuth2TokenType.ACCESS_TOKEN.getValue()));
 	}
 
 	@Test
 	public void doFilterWhenTokenRevocationRequestValidThenSuccessResponse() throws Exception {
 		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
-		Authentication clientPrincipal = new OAuth2ClientAuthenticationToken(registeredClient);
+		Authentication clientPrincipal = new OAuth2ClientAuthenticationToken(
+				registeredClient, ClientAuthenticationMethod.CLIENT_SECRET_BASIC, registeredClient.getClientSecret());
 		OAuth2AccessToken accessToken = new OAuth2AccessToken(
 				OAuth2AccessToken.TokenType.BEARER, "token",
 				Instant.now(), Instant.now().plus(Duration.ofHours(1)),
@@ -197,12 +202,12 @@ public class OAuth2TokenRevocationEndpointFilterTests {
 	}
 
 	private static MockHttpServletRequest createTokenRevocationRequest() {
-		String requestUri = OAuth2TokenRevocationEndpointFilter.DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI;
+		String requestUri = DEFAULT_TOKEN_REVOCATION_ENDPOINT_URI;
 		MockHttpServletRequest request = new MockHttpServletRequest("POST", requestUri);
 		request.setServletPath(requestUri);
 
-		request.addParameter(OAuth2ParameterNames2.TOKEN, "token");
-		request.addParameter(OAuth2ParameterNames2.TOKEN_TYPE_HINT, OAuth2TokenType.ACCESS_TOKEN.getValue());
+		request.addParameter(OAuth2ParameterNames.TOKEN, "token");
+		request.addParameter(OAuth2ParameterNames.TOKEN_TYPE_HINT, OAuth2TokenType.ACCESS_TOKEN.getValue());
 
 		return request;
 	}

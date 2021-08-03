@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,10 @@
 package org.springframework.security.oauth2.server.authorization.authentication;
 
 import org.junit.Test;
+
+import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
-import org.springframework.security.oauth2.core.OAuth2RefreshToken2;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.TestRegisteredClients;
 
@@ -37,11 +38,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 public class OAuth2AccessTokenAuthenticationTokenTests {
 	private RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
-	private OAuth2ClientAuthenticationToken clientPrincipal =
-			new OAuth2ClientAuthenticationToken(this.registeredClient);
+	private OAuth2ClientAuthenticationToken clientPrincipal = new OAuth2ClientAuthenticationToken(
+			this.registeredClient, ClientAuthenticationMethod.CLIENT_SECRET_BASIC, this.registeredClient.getClientSecret());
 	private OAuth2AccessToken accessToken = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,
 			"access-token", Instant.now(), Instant.now().plusSeconds(300));
-	private OAuth2RefreshToken refreshToken = new OAuth2RefreshToken2(
+	private OAuth2RefreshToken refreshToken = new OAuth2RefreshToken(
 			"refresh-token", Instant.now(), Instant.now().plus(1, ChronoUnit.DAYS));
 	private Map<String, Object> additionalParameters = Collections.singletonMap("custom-param", "custom-value");
 

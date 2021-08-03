@@ -45,11 +45,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * @see <a target="_blank" href="https://tools.ietf.org/html/rfc7517">JSON Web Key (JWK)</a>
  * @see <a target="_blank" href="https://tools.ietf.org/html/rfc7517#section-5">Section 5 JWK Set Format</a>
  */
-public class NimbusJwkSetEndpointFilter extends OncePerRequestFilter {
+public final class NimbusJwkSetEndpointFilter extends OncePerRequestFilter {
 	/**
 	 * The default endpoint {@code URI} for JWK Set requests.
 	 */
-	public static final String DEFAULT_JWK_SET_ENDPOINT_URI = "/oauth2/jwks";
+	private static final String DEFAULT_JWK_SET_ENDPOINT_URI = "/oauth2/jwks";
 
 	private final JWKSource<SecurityContext> jwkSource;
 	private final JWKSelector jwkSelector;

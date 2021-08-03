@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,19 @@
  */
 package org.springframework.security.oauth2.server.authorization.oidc.web;
 
+import javax.servlet.FilterChain;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
 import org.junit.Test;
+
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.oauth2.server.authorization.config.ProviderSettings;
 
-import javax.servlet.FilterChain;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -38,18 +39,19 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * @author Daniel Garnier-Moiroux
  */
 public class OidcProviderConfigurationEndpointFilterTests {
+	private static final String DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI = "/.well-known/openid-configuration";
 
 	@Test
 	public void constructorWhenProviderSettingsNullThenThrowIllegalArgumentException() {
-		assertThatThrownBy(() -> new OidcProviderConfigurationEndpointFilter(null))
-				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessage("providerSettings cannot be null");
+		assertThatIllegalArgumentException()
+				.isThrownBy(() -> new OidcProviderConfigurationEndpointFilter(null))
+				.withMessage("providerSettings cannot be null");
 	}
 
 	@Test
 	public void doFilterWhenNotConfigurationRequestThenNotProcessed() throws Exception {
 		OidcProviderConfigurationEndpointFilter filter =
-				new OidcProviderConfigurationEndpointFilter(new ProviderSettings());
+				new OidcProviderConfigurationEndpointFilter(ProviderSettings.builder().build());
 
 		String requestUri = "/path";
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", requestUri);
@@ -65,9 +67,9 @@ public class OidcProviderConfigurationEndpointFilterTests {
 	@Test
 	public void doFilterWhenConfigurationRequestPostThenNotProcessed() throws Exception {
 		OidcProviderConfigurationEndpointFilter filter =
-				new OidcProviderConfigurationEndpointFilter(new ProviderSettings());
+				new OidcProviderConfigurationEndpointFilter(ProviderSettings.builder().build());
 
-		String requestUri = OidcProviderConfigurationEndpointFilter.DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI;
+		String requestUri = DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI;
 		MockHttpServletRequest request = new MockHttpServletRequest("POST", requestUri);
 		request.setServletPath(requestUri);
 		MockHttpServletResponse response = new MockHttpServletResponse();
@@ -84,15 +86,16 @@ public class OidcProviderConfigurationEndpointFilterTests {
 		String tokenEndpoint = "/oauth2/v1/token";
 		String jwkSetEndpoint = "/oauth2/v1/jwks";
 
-		ProviderSettings providerSettings = new ProviderSettings()
+		ProviderSettings providerSettings = ProviderSettings.builder()
 				.issuer("https://example.com/issuer1")
 				.authorizationEndpoint(authorizationEndpoint)
 				.tokenEndpoint(tokenEndpoint)
-				.jwkSetEndpoint(jwkSetEndpoint);
+				.jwkSetEndpoint(jwkSetEndpoint)
+				.build();
 		OidcProviderConfigurationEndpointFilter filter =
 				new OidcProviderConfigurationEndpointFilter(providerSettings);
 
-		String requestUri = OidcProviderConfigurationEndpointFilter.DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI;
+		String requestUri = DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI;
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", requestUri);
 		request.setServletPath(requestUri);
 		MockHttpServletResponse response = new MockHttpServletResponse();
@@ -118,19 +121,20 @@ public class OidcProviderConfigurationEndpointFilterTests {
 
 	@Test
 	public void doFilterWhenProviderSettingsWithInvalidIssuerThenThrowIllegalArgumentException() {
-		ProviderSettings providerSettings = new ProviderSettings()
-				.issuer("https://this is an invalid URL");
+		ProviderSettings providerSettings = ProviderSettings.builder()
+				.issuer("https://this is an invalid URL")
+				.build();
 		OidcProviderConfigurationEndpointFilter filter =
 				new OidcProviderConfigurationEndpointFilter(providerSettings);
 
-		String requestUri = OidcProviderConfigurationEndpointFilter.DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI;
+		String requestUri = DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI;
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", requestUri);
 		request.setServletPath(requestUri);
 		MockHttpServletResponse response = new MockHttpServletResponse();
 		FilterChain filterChain = mock(FilterChain.class);
 
-		assertThatThrownBy(() -> filter.doFilter(request, response, filterChain))
-				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessage("issuer must be a valid URL");
+		assertThatIllegalArgumentException()
+				.isThrownBy(() -> filter.doFilter(request, response, filterChain))
+				.withMessage("issuer must be a valid URL");
 	}
 }

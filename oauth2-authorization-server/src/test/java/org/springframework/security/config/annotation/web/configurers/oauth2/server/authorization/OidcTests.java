@@ -15,6 +15,8 @@
  */
 package org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization;
 
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
@@ -26,11 +28,11 @@ import java.util.stream.Collectors;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
-import org.junit.Before;
+import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
-import org.mockito.ArgumentCaptor;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
@@ -38,13 +40,21 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.jdbc.core.JdbcOperations;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.mock.http.client.MockClientHttpResponse;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.config.test.SpringTestRule;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.crypto.password.NoOpPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.OAuth2TokenType;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenResponse;
@@ -54,37 +64,32 @@ import org.springframework.security.oauth2.core.http.converter.OAuth2AccessToken
 import org.springframework.security.oauth2.core.oidc.OidcScopes;
 import org.springframework.security.oauth2.core.oidc.endpoint.OidcParameterNames;
 import org.springframework.security.oauth2.jose.TestJwks;
-import org.springframework.security.oauth2.jose.TestKeys;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.JwtEncodingContext;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenCustomizer;
+import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository.RegisteredClientParametersMapper;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.TestRegisteredClients;
 import org.springframework.security.oauth2.server.authorization.config.ProviderSettings;
-import org.springframework.security.oauth2.server.authorization.oidc.web.OidcProviderConfigurationEndpointFilter;
-import org.springframework.security.oauth2.server.authorization.web.OAuth2AuthorizationEndpointFilter;
-import org.springframework.security.oauth2.server.authorization.web.OAuth2TokenEndpointFilter;
+import org.springframework.security.oauth2.server.authorization.jackson2.TestingAuthenticationTokenMixin;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
+import org.springframework.web.util.UriComponents;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.CoreMatchers.containsString;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -98,13 +103,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author Daniel Garnier-Moiroux
  */
 public class OidcTests {
+	private static final String DEFAULT_AUTHORIZATION_ENDPOINT_URI = "/oauth2/authorize";
+	private static final String DEFAULT_TOKEN_ENDPOINT_URI = "/oauth2/token";
+	private static final String DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI = "/.well-known/openid-configuration";
 	private static final String ISSUER_URL = "https://example.com/issuer1";
 	private static final String AUTHORITIES_CLAIM = "authorities";
 	private static final OAuth2TokenType AUTHORIZATION_CODE_TOKEN_TYPE = new OAuth2TokenType(OAuth2ParameterNames.CODE);
-	private static RegisteredClientRepository registeredClientRepository;
-	private static OAuth2AuthorizationService authorizationService;
+	private static EmbeddedDatabase db;
 	private static JWKSource<SecurityContext> jwkSource;
-	private static NimbusJwtDecoder jwtDecoder;
 	private static HttpMessageConverter<OAuth2AccessTokenResponse> accessTokenHttpResponseConverter =
 			new OAuth2AccessTokenResponseHttpMessageConverter();
 
@@ -114,26 +120,49 @@ public class OidcTests {
 	@Autowired
 	private MockMvc mvc;
 
+	@Autowired
+	private JdbcOperations jdbcOperations;
+
+	@Autowired
+	private RegisteredClientRepository registeredClientRepository;
+
+	@Autowired
+	private OAuth2AuthorizationService authorizationService;
+
+	@Autowired
+	private JwtDecoder jwtDecoder;
+
 	@BeforeClass
 	public static void init() {
-		registeredClientRepository = mock(RegisteredClientRepository.class);
-		authorizationService = mock(OAuth2AuthorizationService.class);
 		JWKSet jwkSet = new JWKSet(TestJwks.DEFAULT_RSA_JWK);
 		jwkSource = (jwkSelector, securityContext) -> jwkSelector.select(jwkSet);
-		jwtDecoder = NimbusJwtDecoder.withPublicKey(TestKeys.DEFAULT_PUBLIC_KEY).build();
+		db = new EmbeddedDatabaseBuilder()
+				.generateUniqueName(true)
+				.setType(EmbeddedDatabaseType.HSQL)
+				.setScriptEncoding("UTF-8")
+				.addScript("org/springframework/security/oauth2/server/authorization/oauth2-authorization-schema.sql")
+				.addScript("org/springframework/security/oauth2/server/authorization/client/oauth2-registered-client-schema.sql")
+				.build();
 	}
 
-	@Before
-	public void setup() {
-		reset(registeredClientRepository);
-		reset(authorizationService);
+	@After
+	public void tearDown() {
+		if (jdbcOperations != null) {
+			jdbcOperations.update("truncate table oauth2_authorization");
+			jdbcOperations.update("truncate table oauth2_registered_client");
+		}
+	}
+
+	@AfterClass
+	public static void destroy() {
+		db.shutdown();
 	}
 
 	@Test
 	public void requestWhenConfigurationRequestAndIssuerSetThenReturnConfigurationResponse() throws Exception {
 		this.spring.register(AuthorizationServerConfigurationWithIssuer.class).autowire();
 
-		this.mvc.perform(get(OidcProviderConfigurationEndpointFilter.DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI))
+		this.mvc.perform(get(DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI))
 				.andExpect(status().is2xxSuccessful())
 				.andExpect(jsonPath("issuer").value(ISSUER_URL));
 	}
@@ -157,28 +186,20 @@ public class OidcTests {
 		this.spring.register(AuthorizationServerConfiguration.class).autowire();
 
 		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().scope(OidcScopes.OPENID).build();
-		when(registeredClientRepository.findByClientId(eq(registeredClient.getClientId())))
-				.thenReturn(registeredClient);
+		this.registeredClientRepository.save(registeredClient);
 
-		MvcResult mvcResult = this.mvc.perform(get(OAuth2AuthorizationEndpointFilter.DEFAULT_AUTHORIZATION_ENDPOINT_URI)
+		MvcResult mvcResult = this.mvc.perform(get(DEFAULT_AUTHORIZATION_ENDPOINT_URI)
 				.params(getAuthorizationRequestParameters(registeredClient))
 				.with(user("user").roles("A", "B")))
 				.andExpect(status().is3xxRedirection())
 				.andReturn();
-		assertThat(mvcResult.getResponse().getRedirectedUrl()).matches("https://example.com\\?code=.{15,}&state=state");
+		String redirectedUrl = mvcResult.getResponse().getRedirectedUrl();
+		assertThat(redirectedUrl).matches("https://example.com\\?code=.{15,}&state=state");
 
-		verify(registeredClientRepository).findByClientId(eq(registeredClient.getClientId()));
+		String authorizationCode = extractParameterFromRedirectUri(redirectedUrl, "code");
+		OAuth2Authorization authorization = this.authorizationService.findByToken(authorizationCode, AUTHORIZATION_CODE_TOKEN_TYPE);
 
-		ArgumentCaptor<OAuth2Authorization> authorizationCaptor = ArgumentCaptor.forClass(OAuth2Authorization.class);
-		verify(authorizationService).save(authorizationCaptor.capture());
-		OAuth2Authorization authorization = authorizationCaptor.getValue();
-
-		when(authorizationService.findByToken(
-				eq(authorization.getToken(OAuth2AuthorizationCode.class).getToken().getTokenValue()),
-				eq(AUTHORIZATION_CODE_TOKEN_TYPE)))
-				.thenReturn(authorization);
-
-		mvcResult = this.mvc.perform(post(OAuth2TokenEndpointFilter.DEFAULT_TOKEN_ENDPOINT_URI)
+		mvcResult = this.mvc.perform(post(DEFAULT_TOKEN_ENDPOINT_URI)
 				.params(getTokenRequestParameters(registeredClient, authorization))
 				.header(HttpHeaders.AUTHORIZATION, "Basic " + encodeBasicAuth(
 						registeredClient.getClientId(), registeredClient.getClientSecret())))
@@ -193,19 +214,13 @@ public class OidcTests {
 				.andExpect(jsonPath("$.id_token").isNotEmpty())
 				.andReturn();
 
-		verify(registeredClientRepository, times(2)).findByClientId(eq(registeredClient.getClientId()));
-		verify(authorizationService).findByToken(
-				eq(authorization.getToken(OAuth2AuthorizationCode.class).getToken().getTokenValue()),
-				eq(AUTHORIZATION_CODE_TOKEN_TYPE));
-		verify(authorizationService, times(2)).save(any());
-
 		MockHttpServletResponse servletResponse = mvcResult.getResponse();
 		MockClientHttpResponse httpResponse = new MockClientHttpResponse(
 				servletResponse.getContentAsByteArray(), HttpStatus.valueOf(servletResponse.getStatus()));
 		OAuth2AccessTokenResponse accessTokenResponse = accessTokenHttpResponseConverter.read(OAuth2AccessTokenResponse.class, httpResponse);
 
 		// Assert user authorities was propagated as claim in ID Token
-		Jwt idToken = jwtDecoder.decode((String) accessTokenResponse.getAdditionalParameters().get(OidcParameterNames.ID_TOKEN));
+		Jwt idToken = this.jwtDecoder.decode((String) accessTokenResponse.getAdditionalParameters().get(OidcParameterNames.ID_TOKEN));
 		List<String> authoritiesClaim = idToken.getClaim(AUTHORITIES_CLAIM);
 		Authentication principal = authorization.getAttribute(Principal.class.getName());
 		Set<String> userAuthorities = principal.getAuthorities().stream()
@@ -242,18 +257,36 @@ public class OidcTests {
 		return new String(encodedBytes, StandardCharsets.UTF_8);
 	}
 
+	private String extractParameterFromRedirectUri(String redirectUri, String param) throws UnsupportedEncodingException {
+		String locationHeader = URLDecoder.decode(redirectUri, StandardCharsets.UTF_8.name());
+		UriComponents uriComponents = UriComponentsBuilder.fromUriString(locationHeader).build();
+		return uriComponents.getQueryParams().getFirst(param);
+	}
+
 	@EnableWebSecurity
 	@Import(OAuth2AuthorizationServerConfiguration.class)
 	static class AuthorizationServerConfiguration {
 
 		@Bean
-		RegisteredClientRepository registeredClientRepository() {
-			return registeredClientRepository;
+		OAuth2AuthorizationService authorizationService(JdbcOperations jdbcOperations, RegisteredClientRepository registeredClientRepository) {
+			JdbcOAuth2AuthorizationService authorizationService = new JdbcOAuth2AuthorizationService(jdbcOperations, registeredClientRepository);
+			authorizationService.setAuthorizationRowMapper(new RowMapper(registeredClientRepository));
+			authorizationService.setAuthorizationParametersMapper(new ParametersMapper());
+			return authorizationService;
 		}
 
 		@Bean
-		OAuth2AuthorizationService authorizationService() {
-			return authorizationService;
+		RegisteredClientRepository registeredClientRepository(JdbcOperations jdbcOperations, PasswordEncoder passwordEncoder) {
+			JdbcRegisteredClientRepository jdbcRegisteredClientRepository = new JdbcRegisteredClientRepository(jdbcOperations);
+			RegisteredClientParametersMapper registeredClientParametersMapper = new RegisteredClientParametersMapper();
+			registeredClientParametersMapper.setPasswordEncoder(passwordEncoder);
+			jdbcRegisteredClientRepository.setRegisteredClientParametersMapper(registeredClientParametersMapper);
+			return jdbcRegisteredClientRepository;
+		}
+
+		@Bean
+		JdbcOperations jdbcOperations() {
+			return new JdbcTemplate(db);
 		}
 
 		@Bean
@@ -273,6 +306,30 @@ public class OidcTests {
 				}
 			};
 		}
+
+		@Bean
+		PasswordEncoder passwordEncoder() {
+			return NoOpPasswordEncoder.getInstance();
+		}
+
+		static class RowMapper extends JdbcOAuth2AuthorizationService.OAuth2AuthorizationRowMapper {
+
+			RowMapper(RegisteredClientRepository registeredClientRepository) {
+				super(registeredClientRepository);
+				getObjectMapper().addMixIn(TestingAuthenticationToken.class, TestingAuthenticationTokenMixin.class);
+			}
+
+		}
+
+		static class ParametersMapper extends JdbcOAuth2AuthorizationService.OAuth2AuthorizationParametersMapper {
+
+			ParametersMapper() {
+				super();
+				getObjectMapper().addMixIn(TestingAuthenticationToken.class, TestingAuthenticationTokenMixin.class);
+			}
+
+		}
+
 	}
 
 	@EnableWebSecurity
@@ -281,7 +338,7 @@ public class OidcTests {
 
 		@Bean
 		ProviderSettings providerSettings() {
-			return new ProviderSettings().issuer(ISSUER_URL);
+			return ProviderSettings.builder().issuer(ISSUER_URL).build();
 		}
 	}
 
@@ -291,7 +348,7 @@ public class OidcTests {
 
 		@Bean
 		ProviderSettings providerSettings() {
-			return new ProviderSettings().issuer("urn:example");
+			return ProviderSettings.builder().issuer("urn:example").build();
 		}
 	}
 
@@ -301,7 +358,7 @@ public class OidcTests {
 
 		@Bean
 		ProviderSettings providerSettings() {
-			return new ProviderSettings().issuer("https://not a valid uri");
+			return ProviderSettings.builder().issuer("https://not a valid uri").build();
 		}
 	}
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,34 +15,21 @@
  */
 package org.springframework.security.oauth2.server.authorization.config;
 
-import java.util.HashMap;
 import java.util.Map;
+
+import org.springframework.util.Assert;
 
 /**
  * A facility for client configuration settings.
  *
  * @author Joe Grandja
  * @since 0.0.2
- * @see Settings
+ * @see AbstractSettings
+ * @see ConfigurationSettingNames.Client
  */
-public class ClientSettings extends Settings {
-	private static final String CLIENT_SETTING_BASE = "setting.client.";
-	public static final String REQUIRE_PROOF_KEY = CLIENT_SETTING_BASE.concat("require-proof-key");
-	public static final String REQUIRE_USER_CONSENT = CLIENT_SETTING_BASE.concat("require-user-consent");
+public final class ClientSettings extends AbstractSettings {
 
-	/**
-	 * Constructs a {@code ClientSettings}.
-	 */
-	public ClientSettings() {
-		this(defaultSettings());
-	}
-
-	/**
-	 * Constructs a {@code ClientSettings} using the provided parameters.
-	 *
-	 * @param settings the initial settings
-	 */
-	public ClientSettings(Map<String, Object> settings) {
+	private ClientSettings(Map<String, Object> settings) {
 		super(settings);
 	}
 
@@ -52,48 +39,83 @@ public class ClientSettings extends Settings {
 	 *
 	 * @return {@code true} if the client is required to provide a proof key challenge and verifier, {@code false} otherwise
 	 */
-	public boolean requireProofKey() {
-		return setting(REQUIRE_PROOF_KEY);
+	public boolean isRequireProofKey() {
+		return getSetting(ConfigurationSettingNames.Client.REQUIRE_PROOF_KEY);
 	}
 
 	/**
-	 * Set to {@code true} if the client is required to provide a proof key challenge and verifier
-	 * when performing the Authorization Code Grant flow.
-	 *
-	 * @param requireProofKey {@code true} if the client is required to provide a proof key challenge and verifier, {@code false} otherwise
-	 * @return the {@link ClientSettings}
-	 */
-	public ClientSettings requireProofKey(boolean requireProofKey) {
-		setting(REQUIRE_PROOF_KEY, requireProofKey);
-		return this;
-	}
-
-	/**
-	 * Returns {@code true} if the user's consent is required when the client requests access.
+	 * Returns {@code true} if authorization consent is required when the client requests access.
 	 * The default is {@code false}.
 	 *
-	 * @return {@code true} if the user's consent is required when the client requests access, {@code false} otherwise
+	 * @return {@code true} if authorization consent is required when the client requests access, {@code false} otherwise
 	 */
-	public boolean requireUserConsent() {
-		return setting(REQUIRE_USER_CONSENT);
+	public boolean isRequireAuthorizationConsent() {
+		return getSetting(ConfigurationSettingNames.Client.REQUIRE_AUTHORIZATION_CONSENT);
 	}
 
 	/**
-	 * Set to {@code true} if the user's consent is required when the client requests access.
-	 * This applies to all interactive flows (e.g. {@code authorization_code} and {@code device_code}).
+	 * Constructs a new {@link Builder} with the default settings.
 	 *
-	 * @param requireUserConsent {@code true} if the user's consent is required when the client requests access, {@code false} otherwise
-	 * @return the {@link ClientSettings}
+	 * @return the {@link Builder}
 	 */
-	public ClientSettings requireUserConsent(boolean requireUserConsent) {
-		setting(REQUIRE_USER_CONSENT, requireUserConsent);
-		return this;
+	public static Builder builder() {
+		return new Builder()
+				.requireProofKey(false)
+				.requireAuthorizationConsent(false);
 	}
 
-	protected static Map<String, Object> defaultSettings() {
-		Map<String, Object> settings = new HashMap<>();
-		settings.put(REQUIRE_PROOF_KEY, false);
-		settings.put(REQUIRE_USER_CONSENT, false);
-		return settings;
+	/**
+	 * Constructs a new {@link Builder} with the provided settings.
+	 *
+	 * @param settings the settings to initialize the builder
+	 * @return the {@link Builder}
+	 */
+	public static Builder withSettings(Map<String, Object> settings) {
+		Assert.notEmpty(settings, "settings cannot be empty");
+		return new Builder()
+				.settings(s -> s.putAll(settings));
 	}
+
+	/**
+	 * A builder for {@link ClientSettings}.
+	 */
+	public static class Builder extends AbstractBuilder<ClientSettings, Builder> {
+
+		private Builder() {
+		}
+
+		/**
+		 * Set to {@code true} if the client is required to provide a proof key challenge and verifier
+		 * when performing the Authorization Code Grant flow.
+		 *
+		 * @param requireProofKey {@code true} if the client is required to provide a proof key challenge and verifier, {@code false} otherwise
+		 * @return the {@link Builder} for further configuration
+		 */
+		public Builder requireProofKey(boolean requireProofKey) {
+			return setting(ConfigurationSettingNames.Client.REQUIRE_PROOF_KEY, requireProofKey);
+		}
+
+		/**
+		 * Set to {@code true} if authorization consent is required when the client requests access.
+		 * This applies to all interactive flows (e.g. {@code authorization_code} and {@code device_code}).
+		 *
+		 * @param requireAuthorizationConsent {@code true} if authorization consent is required when the client requests access, {@code false} otherwise
+		 * @return the {@link Builder} for further configuration
+		 */
+		public Builder requireAuthorizationConsent(boolean requireAuthorizationConsent) {
+			return setting(ConfigurationSettingNames.Client.REQUIRE_AUTHORIZATION_CONSENT, requireAuthorizationConsent);
+		}
+
+		/**
+		 * Builds the {@link ClientSettings}.
+		 *
+		 * @return the {@link ClientSettings}
+		 */
+		@Override
+		public ClientSettings build() {
+			return new ClientSettings(getSettings());
+		}
+
+	}
+
 }

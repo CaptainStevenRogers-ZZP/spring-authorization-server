@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,15 @@
  */
 package org.springframework.security.oauth2.server.authorization.web;
 
+import javax.servlet.FilterChain;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
+
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -36,15 +42,13 @@ import org.springframework.security.oauth2.server.authorization.authentication.O
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.TestRegisteredClients;
 import org.springframework.security.web.authentication.AuthenticationConverter;
+import org.springframework.security.web.authentication.WebAuthenticationDetails;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 
-import javax.servlet.FilterChain;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.InstanceOfAssertFactories.type;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -163,7 +167,7 @@ public class OAuth2ClientAuthenticationFilterTests {
 	@Test
 	public void doFilterWhenRequestMatchesAndBadCredentialsThenInvalidClientError() throws Exception {
 		when(this.authenticationConverter.convert(any(HttpServletRequest.class))).thenReturn(
-				new OAuth2ClientAuthenticationToken("clientId", "invalid-secret", ClientAuthenticationMethod.BASIC, null));
+				new OAuth2ClientAuthenticationToken("clientId", ClientAuthenticationMethod.CLIENT_SECRET_BASIC, "invalid-secret", null));
 		when(this.authenticationManager.authenticate(any(Authentication.class))).thenThrow(
 				new OAuth2AuthenticationException(new OAuth2Error(OAuth2ErrorCodes.INVALID_CLIENT)));
 
@@ -184,14 +188,17 @@ public class OAuth2ClientAuthenticationFilterTests {
 
 	@Test
 	public void doFilterWhenRequestMatchesAndValidCredentialsThenProcessed() throws Exception {
+		final String remoteAddress = "remote-address";
+
 		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
 		when(this.authenticationConverter.convert(any(HttpServletRequest.class))).thenReturn(
-				new OAuth2ClientAuthenticationToken(registeredClient.getClientId(), registeredClient.getClientSecret(), ClientAuthenticationMethod.BASIC, null));
+				new OAuth2ClientAuthenticationToken(registeredClient.getClientId(), ClientAuthenticationMethod.CLIENT_SECRET_BASIC, registeredClient.getClientSecret(), null));
 		when(this.authenticationManager.authenticate(any(Authentication.class))).thenReturn(
-				new OAuth2ClientAuthenticationToken(registeredClient));
+				new OAuth2ClientAuthenticationToken(registeredClient, ClientAuthenticationMethod.CLIENT_SECRET_BASIC, registeredClient.getClientSecret()));
 
 		MockHttpServletRequest request = new MockHttpServletRequest("POST", this.filterProcessesUrl);
 		request.setServletPath(this.filterProcessesUrl);
+		request.setRemoteAddr(remoteAddress);
 		MockHttpServletResponse response = new MockHttpServletResponse();
 		FilterChain filterChain = mock(FilterChain.class);
 
@@ -202,6 +209,16 @@ public class OAuth2ClientAuthenticationFilterTests {
 		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 		assertThat(authentication).isInstanceOf(OAuth2ClientAuthenticationToken.class);
 		assertThat(((OAuth2ClientAuthenticationToken) authentication).getRegisteredClient()).isEqualTo(registeredClient);
+
+		ArgumentCaptor<OAuth2ClientAuthenticationToken> authenticationRequestCaptor =
+				ArgumentCaptor.forClass(OAuth2ClientAuthenticationToken.class);
+		verify(this.authenticationManager).authenticate(authenticationRequestCaptor.capture());
+		assertThat(authenticationRequestCaptor)
+				.extracting(ArgumentCaptor::getValue)
+				.extracting(OAuth2ClientAuthenticationToken::getDetails)
+				.asInstanceOf(type(WebAuthenticationDetails.class))
+				.extracting(WebAuthenticationDetails::getRemoteAddress)
+				.isEqualTo(remoteAddress);
 	}
 
 	private OAuth2Error readError(MockHttpServletResponse response) throws Exception {

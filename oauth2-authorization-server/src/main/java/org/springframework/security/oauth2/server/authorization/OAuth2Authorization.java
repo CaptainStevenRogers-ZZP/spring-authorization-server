@@ -16,6 +16,7 @@
 package org.springframework.security.oauth2.server.authorization;
 
 import java.io.Serializable;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -24,14 +25,14 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import org.springframework.lang.Nullable;
-import org.springframework.security.oauth2.core.Version;
-import org.springframework.security.oauth2.core.AbstractOAuth2Token;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
-import org.springframework.security.oauth2.core.OAuth2RefreshToken2;
+import org.springframework.security.oauth2.core.OAuth2Token;
+import org.springframework.security.oauth2.core.Version;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 /**
@@ -44,7 +45,7 @@ import org.springframework.util.StringUtils;
  * @since 0.0.1
  * @see RegisteredClient
  * @see AuthorizationGrantType
- * @see AbstractOAuth2Token
+ * @see OAuth2Token
  * @see OAuth2AccessToken
  * @see OAuth2RefreshToken
  */
@@ -62,7 +63,7 @@ public class OAuth2Authorization implements Serializable {
 	private String registeredClientId;
 	private String principalName;
 	private AuthorizationGrantType authorizationGrantType;
-	private Map<Class<? extends AbstractOAuth2Token>, Token<?>> tokens;
+	private Map<Class<? extends OAuth2Token>, Token<?>> tokens;
 	private Map<String, Object> attributes;
 
 	protected OAuth2Authorization() {
@@ -132,7 +133,7 @@ public class OAuth2Authorization implements Serializable {
 	 */
 	@Nullable
 	@SuppressWarnings("unchecked")
-	public <T extends AbstractOAuth2Token> Token<T> getToken(Class<T> tokenType) {
+	public <T extends OAuth2Token> Token<T> getToken(Class<T> tokenType) {
 		Assert.notNull(tokenType, "tokenType cannot be null");
 		Token<?> token = this.tokens.get(tokenType);
 		return token != null ? (Token<T>) token : null;
@@ -147,7 +148,7 @@ public class OAuth2Authorization implements Serializable {
 	 */
 	@Nullable
 	@SuppressWarnings("unchecked")
-	public <T extends AbstractOAuth2Token> Token<T> getToken(String tokenValue) {
+	public <T extends OAuth2Token> Token<T> getToken(String tokenValue) {
 		Assert.hasText(tokenValue, "tokenValue cannot be empty");
 		Token<?> token = this.tokens.values().stream()
 				.filter(t -> t.getToken().getTokenValue().equals(tokenValue))
@@ -235,7 +236,7 @@ public class OAuth2Authorization implements Serializable {
 	 * @author Joe Grandja
 	 * @since 0.1.0
 	 */
-	public static class Token<T extends AbstractOAuth2Token> implements Serializable {
+	public static class Token<T extends OAuth2Token> implements Serializable {
 		private static final long serialVersionUID = Version.SERIAL_VERSION_UID;
 		protected static final String TOKEN_METADATA_BASE = "metadata.token.";
 
@@ -262,9 +263,9 @@ public class OAuth2Authorization implements Serializable {
 		}
 
 		/**
-		 * Returns the token of type {@link AbstractOAuth2Token}.
+		 * Returns the token of type {@link OAuth2Token}.
 		 *
-		 * @return the token of type {@link AbstractOAuth2Token}
+		 * @return the token of type {@link OAuth2Token}
 		 */
 		public T getToken() {
 			return this.token;
@@ -278,6 +279,37 @@ public class OAuth2Authorization implements Serializable {
 		 */
 		public boolean isInvalidated() {
 			return Boolean.TRUE.equals(getMetadata(INVALIDATED_METADATA_NAME));
+		}
+
+		/**
+		 * Returns {@code true} if the token has expired.
+		 *
+		 * @return {@code true} if the token has expired, {@code false} otherwise
+		 */
+		public boolean isExpired() {
+			return getToken().getExpiresAt() != null && Instant.now().isAfter(getToken().getExpiresAt());
+		}
+
+		/**
+		 * Returns {@code true} if the token is before the time it can be used.
+		 *
+		 * @return {@code true} if the token is before the time it can be used, {@code false} otherwise
+		 */
+		public boolean isBeforeUse() {
+			Instant notBefore = null;
+			if (!CollectionUtils.isEmpty(getClaims())) {
+				notBefore = (Instant) getClaims().get("nbf");
+			}
+			return notBefore != null && Instant.now().isBefore(notBefore);
+		}
+
+		/**
+		 * Returns {@code true} if the token is currently active.
+		 *
+		 * @return {@code true} if the token is currently active, {@code false} otherwise
+		 */
+		public boolean isActive() {
+			return !isInvalidated() && !isExpired() && !isBeforeUse();
 		}
 
 		/**
@@ -347,7 +379,7 @@ public class OAuth2Authorization implements Serializable {
 		private final String registeredClientId;
 		private String principalName;
 		private AuthorizationGrantType authorizationGrantType;
-		private Map<Class<? extends AbstractOAuth2Token>, Token<?>> tokens = new HashMap<>();
+		private Map<Class<? extends OAuth2Token>, Token<?>> tokens = new HashMap<>();
 		private final Map<String, Object> attributes = new HashMap<>();
 
 		protected Builder(String registeredClientId) {
@@ -408,25 +440,25 @@ public class OAuth2Authorization implements Serializable {
 		}
 
 		/**
-		 * Sets the {@link AbstractOAuth2Token token}.
+		 * Sets the {@link OAuth2Token token}.
 		 *
 		 * @param token the token
 		 * @param <T> the type of the token
 		 * @return the {@link Builder}
 		 */
-		public <T extends AbstractOAuth2Token> Builder token(T token) {
+		public <T extends OAuth2Token> Builder token(T token) {
 			return token(token, (metadata) -> {});
 		}
 
 		/**
-		 * Sets the {@link AbstractOAuth2Token token} and associated metadata.
+		 * Sets the {@link OAuth2Token token} and associated metadata.
 		 *
 		 * @param token the token
 		 * @param metadataConsumer a {@code Consumer} of the metadata {@code Map}
 		 * @param <T> the type of the token
 		 * @return the {@link Builder}
 		 */
-		public <T extends AbstractOAuth2Token> Builder token(T token,
+		public <T extends OAuth2Token> Builder token(T token,
 				Consumer<Map<String, Object>> metadataConsumer) {
 
 			Assert.notNull(token, "token cannot be null");
@@ -436,15 +468,12 @@ public class OAuth2Authorization implements Serializable {
 				metadata.putAll(existingToken.getMetadata());
 			}
 			metadataConsumer.accept(metadata);
-			Class<? extends AbstractOAuth2Token> tokenClass = token.getClass();
-			if (tokenClass.equals(OAuth2RefreshToken2.class)) {
-				tokenClass = OAuth2RefreshToken.class;
-			}
+			Class<? extends OAuth2Token> tokenClass = token.getClass();
 			this.tokens.put(tokenClass, new Token<>(token, metadata));
 			return this;
 		}
 
-		protected final Builder tokens(Map<Class<? extends AbstractOAuth2Token>, Token<?>> tokens) {
+		protected final Builder tokens(Map<Class<? extends OAuth2Token>, Token<?>> tokens) {
 			this.tokens = new HashMap<>(tokens);
 			return this;
 		}

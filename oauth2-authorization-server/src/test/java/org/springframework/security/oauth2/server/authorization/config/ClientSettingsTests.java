@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package org.springframework.security.oauth2.server.authorization.config;
 import org.junit.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for {@link ClientSettings}.
@@ -28,43 +27,38 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class ClientSettingsTests {
 
 	@Test
-	public void constructorWhenDefaultThenDefaultsAreSet() {
-		ClientSettings clientSettings = new ClientSettings();
-		assertThat(clientSettings.settings()).hasSize(2);
-		assertThat(clientSettings.requireProofKey()).isFalse();
-		assertThat(clientSettings.requireUserConsent()).isFalse();
-	}
-
-	@Test
-	public void constructorWhenNullThenThrowIllegalArgumentException() {
-		assertThatThrownBy(() -> new ClientSettings(null))
-				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessage("settings cannot be null");
+	public void buildWhenDefaultThenDefaultsAreSet() {
+		ClientSettings clientSettings = ClientSettings.builder().build();
+		assertThat(clientSettings.getSettings()).hasSize(2);
+		assertThat(clientSettings.isRequireProofKey()).isFalse();
+		assertThat(clientSettings.isRequireAuthorizationConsent()).isFalse();
 	}
 
 	@Test
 	public void requireProofKeyWhenTrueThenSet() {
-		ClientSettings clientSettings = new ClientSettings().requireProofKey(true);
-		assertThat(clientSettings.requireProofKey()).isTrue();
-	}
-
-	@Test
-	public void requireUserConsentWhenTrueThenSet() {
-		ClientSettings clientSettings = new ClientSettings().requireUserConsent(true);
-		assertThat(clientSettings.requireUserConsent()).isTrue();
-	}
-
-	@Test
-	public void settingWhenCalledThenReturnClientSettings() {
-		ClientSettings clientSettings = new ClientSettings()
-				.<ClientSettings>setting("name1", "value1")
+		ClientSettings clientSettings = ClientSettings.builder()
 				.requireProofKey(true)
-				.<ClientSettings>settings(settings -> settings.put("name2", "value2"))
-				.requireUserConsent(true);
-		assertThat(clientSettings.settings()).hasSize(4);
-		assertThat(clientSettings.requireProofKey()).isTrue();
-		assertThat(clientSettings.requireUserConsent()).isTrue();
-		assertThat(clientSettings.<String>setting("name1")).isEqualTo("value1");
-		assertThat(clientSettings.<String>setting("name2")).isEqualTo("value2");
+				.build();
+		assertThat(clientSettings.isRequireProofKey()).isTrue();
 	}
+
+	@Test
+	public void requireAuthorizationConsentWhenTrueThenSet() {
+		ClientSettings clientSettings = ClientSettings.builder()
+				.requireAuthorizationConsent(true)
+				.build();
+		assertThat(clientSettings.isRequireAuthorizationConsent()).isTrue();
+	}
+
+	@Test
+	public void settingWhenCustomThenSet() {
+		ClientSettings clientSettings = ClientSettings.builder()
+				.setting("name1", "value1")
+				.settings(settings -> settings.put("name2", "value2"))
+				.build();
+		assertThat(clientSettings.getSettings()).hasSize(4);
+		assertThat(clientSettings.<String>getSetting("name1")).isEqualTo("value1");
+		assertThat(clientSettings.<String>getSetting("name2")).isEqualTo("value2");
+	}
+
 }

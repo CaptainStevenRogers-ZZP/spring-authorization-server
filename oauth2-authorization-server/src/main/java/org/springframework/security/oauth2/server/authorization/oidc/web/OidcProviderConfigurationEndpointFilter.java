@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2020-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.ServletServerHttpResponse;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
+import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResponseType;
 import org.springframework.security.oauth2.core.oidc.OidcProviderConfiguration;
 import org.springframework.security.oauth2.core.oidc.OidcScopes;
@@ -46,11 +47,11 @@ import java.io.IOException;
  * @see ProviderSettings
  * @see <a target="_blank" href="https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderConfigurationRequest">4.1. OpenID Provider Configuration Request</a>
  */
-public class OidcProviderConfigurationEndpointFilter extends OncePerRequestFilter {
+public final class OidcProviderConfigurationEndpointFilter extends OncePerRequestFilter {
 	/**
 	 * The default endpoint {@code URI} for OpenID Provider Configuration requests.
 	 */
-	public static final String DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI = "/.well-known/openid-configuration";
+	private static final String DEFAULT_OIDC_PROVIDER_CONFIGURATION_ENDPOINT_URI = "/.well-known/openid-configuration";
 
 	private final ProviderSettings providerSettings;
 	private final RequestMatcher requestMatcher;
@@ -76,12 +77,12 @@ public class OidcProviderConfigurationEndpointFilter extends OncePerRequestFilte
 		}
 
 		OidcProviderConfiguration providerConfiguration = OidcProviderConfiguration.builder()
-				.issuer(this.providerSettings.issuer())
-				.authorizationEndpoint(asUrl(this.providerSettings.issuer(), this.providerSettings.authorizationEndpoint()))
-				.tokenEndpoint(asUrl(this.providerSettings.issuer(), this.providerSettings.tokenEndpoint()))
-				.tokenEndpointAuthenticationMethod("client_secret_basic")	// TODO: Use ClientAuthenticationMethod.CLIENT_SECRET_BASIC in Spring Security 5.5.0
-				.tokenEndpointAuthenticationMethod("client_secret_post")	// TODO: Use ClientAuthenticationMethod.CLIENT_SECRET_POST in Spring Security 5.5.0
-				.jwkSetUri(asUrl(this.providerSettings.issuer(), this.providerSettings.jwkSetEndpoint()))
+				.issuer(this.providerSettings.getIssuer())
+				.authorizationEndpoint(asUrl(this.providerSettings.getIssuer(), this.providerSettings.getAuthorizationEndpoint()))
+				.tokenEndpoint(asUrl(this.providerSettings.getIssuer(), this.providerSettings.getTokenEndpoint()))
+				.tokenEndpointAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC.getValue())
+				.tokenEndpointAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST.getValue())
+				.jwkSetUrl(asUrl(this.providerSettings.getIssuer(), this.providerSettings.getJwkSetEndpoint()))
 				.responseType(OAuth2AuthorizationResponseType.CODE.getValue())
 				.grantType(AuthorizationGrantType.AUTHORIZATION_CODE.getValue())
 				.grantType(AuthorizationGrantType.CLIENT_CREDENTIALS.getValue())
